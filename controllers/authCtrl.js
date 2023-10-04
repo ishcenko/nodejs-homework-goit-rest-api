@@ -68,7 +68,7 @@ const varifyEmail = async (req, res) => {
   }
   await User.findByIdAndUpdate(user._id, {
     verify: true,
-    varificationsToken: "",
+    varificationsToken: null,
   });
   res.json({ message: "Verification successful" });
 };
