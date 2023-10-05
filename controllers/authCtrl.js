@@ -1,15 +1,16 @@
 const { User } = require("../models/user");
 const bcrypt = require("bcrypt");
-const { CteateError, ctrlWrapper } = require("../helpers");
+const { CteateError, ctrlWrapper, sendEmail } = require("../helpers");
 const jwt = require("jsonwebtoken");
 const fs = require("fs/promises");
 const path = require("path");
 const Jimp = require("jimp");
 const gravatar = require("gravatar");
+const { nanoid } = require("nanoid");
 
 require("dotenv").config();
 
-const { SECRET_KEY } = process.env;
+const { SECRET_KEY, BASE_URL } = process.env;
 const avatarDir = path.join(__dirname, "../", "pablic", "avatars");
 const registeredUser = async (req, res) => {
   const { email, password } = req.body;
@@ -19,12 +20,25 @@ const registeredUser = async (req, res) => {
   }
   const hashedPassword = await bcrypt.hash(password, 10);
   const avatarURL = gravatar.url(email);
+  const varificationsToken = nanoid();
+  const newUsers = await User.create({
+    ...req.body,
+    password: hashedPassword,
+    avatarURL,
+    varificationsToken,
+  });
 
-  const newUsers = await User.create({ ...req.body, password: hashedPassword });
+  const varifiEmail = {
+    to: email,
+    from: "a_ishcenko@ukr.net",
+    subject: "Varify your email",
+    html: `<a target='_blank' href='${BASE_URL}/api/auth/verify/${varificationsToken}'>Confirm your email address</a>`,
+  };
+  await sendEmail(varifiEmail);
+
   res.status(201).json({
     email: newUsers.email,
     subscription: newUsers.subscription,
-    avatarURL,
   });
 };
 const updateAvatars = async (req, res) => {
@@ -38,6 +52,7 @@ const updateAvatars = async (req, res) => {
     .catch((err) => {
       throw err;
     });
+
   const resultUpload = path.join(avatarDir, filename);
   await fs.unlink(tempUpload);
   const avatarURL = path.join("avatars", filename);
@@ -45,11 +60,46 @@ const updateAvatars = async (req, res) => {
   res.json({ avatarURL });
 };
 
+const varifyEmail = async (req, res) => {
+  const { varificationsToken } = req.params;
+  const user = await User.findOne({ varificationsToken: varificationsToken });
+  if (!user) {
+    throw CteateError(401, "User not found");
+  }
+  await User.findByIdAndUpdate(user._id, {
+    verify: true,
+    varificationsToken: null,
+  });
+  res.json({ message: "Verification successful" });
+};
+const resendVerificationEmail = async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+  if (!user) {
+    throw CteateError(401, "User not found");
+  }
+  if (user.verify) {
+    throw CteateError(400, "Verification has already been passed");
+  }
+
+  const verifyEmail = {
+    to: email,
+    from: "a_ishcenko@ukr.net",
+    subject: "Confirm email address",
+    html: `<a target="_blank" href="${BASE_URL}/api/auth/verify/${user.verificationToken}">Confirm your email address</a>`,
+  };
+
+  await sendEmail(verifyEmail);
+  res.json({ message: "Email sent" });
+};
 const loginUsers = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
   if (!user) {
     throw CteateError(401, "Email or password invalid");
+  }
+  if (!user.verify) {
+    throw CteateError(401, "Email not verified");
   }
   const passwordCompare = await bcrypt.compare(password, user.password);
   if (!passwordCompare) {
@@ -97,4 +147,6 @@ module.exports = {
   logoutUser: ctrlWrapper(logoutUser),
   updateSubscription: ctrlWrapper(updateSubscription),
   updateAvatars: ctrlWrapper(updateAvatars),
+  varifyEmail: ctrlWrapper(varifyEmail),
+  resendVerificationEmail: ctrlWrapper(resendVerificationEmail),
 };
